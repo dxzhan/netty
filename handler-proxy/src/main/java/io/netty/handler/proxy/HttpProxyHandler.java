@@ -5,7 +5,7 @@
  * version 2.0 (the "License"); you may not use this file except in compliance
  * with the License. You may obtain a copy of the License at:
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *   https://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -100,12 +100,17 @@ public final class HttpProxyHandler extends ProxyHandler {
         this.password = ObjectUtil.checkNotNull(password, "password");
 
         ByteBuf authz = Unpooled.copiedBuffer(username + ':' + password, CharsetUtil.UTF_8);
-        ByteBuf authzBase64 = Base64.encode(authz, false);
-
-        authorization = new AsciiString("Basic " + authzBase64.toString(CharsetUtil.US_ASCII));
-
-        authz.release();
-        authzBase64.release();
+        ByteBuf authzBase64;
+        try {
+            authzBase64 = Base64.encode(authz, false);
+        } finally {
+            authz.release();
+        }
+        try {
+            authorization = new AsciiString("Basic " + authzBase64.toString(CharsetUtil.US_ASCII));
+        } finally {
+            authzBase64.release();
+        }
 
         this.outboundHeaders = headers;
         this.ignoreDefaultPortsInConnectHostHeader = ignoreDefaultPortsInConnectHostHeader;
