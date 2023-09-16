@@ -21,7 +21,6 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.CombinedChannelDuplexHandler;
 import io.netty.handler.codec.PrematureChannelClosureException;
-import io.netty.util.ReferenceCountUtil;
 
 import java.util.ArrayDeque;
 import java.util.List;
@@ -66,7 +65,7 @@ public final class HttpClientCodec extends CombinedChannelDuplexHandler<HttpResp
 
     /**
      * Creates a new instance with the default decoder options
-     * ({@code maxInitialLineLength (4096}}, {@code maxHeaderSize (8192)}, and
+     * ({@code maxInitialLineLength (4096)}, {@code maxHeaderSize (8192)}, and
      * {@code maxChunkSize (8192)}).
      */
     public HttpClientCodec() {
@@ -191,7 +190,8 @@ public final class HttpClientCodec extends CombinedChannelDuplexHandler<HttpResp
                 ChannelHandlerContext ctx, Object msg, List<Object> out) throws Exception {
 
             if (upgraded) {
-                out.add(ReferenceCountUtil.retain(msg));
+                // HttpObjectEncoder overrides .write and does not release msg, so we don't need to retain it here
+                out.add(msg);
                 return;
             }
 
@@ -265,8 +265,10 @@ public final class HttpClientCodec extends CombinedChannelDuplexHandler<HttpResp
             // request / response pairs in sync.
             HttpMethod method = queue.poll();
 
-            final int statusCode = ((HttpResponse) msg).status().code();
-            if (statusCode >= 100 && statusCode < 200) {
+            final HttpResponseStatus status = ((HttpResponse) msg).status();
+            final HttpStatusClass statusClass = status.codeClass();
+            final int statusCode = status.code();
+            if (statusClass == HttpStatusClass.INFORMATIONAL) {
                 // An informational response should be excluded from paired comparison.
                 // Just delegate to super method which has all the needed handling.
                 return super.isContentAlwaysEmpty(msg);
