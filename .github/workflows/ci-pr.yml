@@ -32,14 +32,7 @@ jobs:
   verify-pr:
     runs-on: ubuntu-latest
     steps:
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          # this might remove tools that are actually needed,
-          # if set to "true" but frees about 6 GB
-          tool-cache: false
-
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Set up JDK 8
         uses: actions/setup-java@v3
         with:
@@ -71,7 +64,7 @@ jobs:
     name: windows-x86_64-java11-boringssl
     needs: verify-pr
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up JDK 11
         uses: actions/setup-java@v3
@@ -120,14 +113,7 @@ jobs:
       packages: write  # for uraimo/run-on-arch-action to cache docker images
     needs: verify-pr
     steps:
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          # this might remove tools that are actually needed,
-          # if set to "true" but frees about 6 GB
-          tool-cache: false
-
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       # Cache .m2/repository
       - name: Cache local Maven repository
@@ -140,7 +126,7 @@ jobs:
             ${{ runner.os }}-maven-build-pr-aarch64-
             ${{ runner.os }}-maven-
 
-      - uses: uraimo/run-on-arch-action@v2.5.0
+      - uses: uraimo/run-on-arch-action@v2.5.1
         name: Run commands
         id: runcmd
         with:
@@ -184,9 +170,9 @@ jobs:
           - setup: linux-x86_64-java17
             docker-compose-build: "-f docker/docker-compose.yaml -f docker/docker-compose.centos-7.117.yaml build"
             docker-compose-run: "-f docker/docker-compose.yaml -f docker/docker-compose.centos-7.117.yaml run build-leak"
-          - setup: linux-x86_64-java20
-            docker-compose-build: "-f docker/docker-compose.yaml -f docker/docker-compose.centos-6.20.yaml build"
-            docker-compose-run: "-f docker/docker-compose.yaml -f docker/docker-compose.centos-6.20.yaml run build-leak"
+          - setup: linux-x86_64-java21
+            docker-compose-build: "-f docker/docker-compose.yaml -f docker/docker-compose.centos-6.21.yaml build"
+            docker-compose-run: "-f docker/docker-compose.yaml -f docker/docker-compose.centos-6.21.yaml run build-leak"
           - setup: linux-x86_64-java11-boringssl
             docker-compose-build: "-f docker/docker-compose.yaml -f docker/docker-compose.centos-6.111.yaml build"
             docker-compose-run: "-f docker/docker-compose.yaml -f docker/docker-compose.centos-6.111.yaml run build-leak-boringssl-static"
@@ -194,14 +180,7 @@ jobs:
     name: ${{ matrix.setup }} build
     needs: verify-pr
     steps:
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          # this might remove tools that are actually needed,
-          # if set to "true" but frees about 6 GB
-          tool-cache: false
-
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       # Cache .m2/repository
       - name: Cache local Maven repository
@@ -213,15 +192,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-${{ matrix.setup }}-
             ${{ runner.os }}-maven-
-
-      # Enable caching of Docker layers
-      - uses: jpribyl/action-docker-layer-caching@v0.1.1
-        continue-on-error: true
-        with:
-          key: build-docker-cache-${{ matrix.setup }}-{hash}
-          restore-keys: |
-            build-docker-cache-${{ matrix.setup }}-
-            build-docker-cache-
 
       - name: Build docker image
         run: docker-compose ${{ matrix.docker-compose-build }}
