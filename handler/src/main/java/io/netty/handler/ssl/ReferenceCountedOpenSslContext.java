@@ -32,6 +32,7 @@ import io.netty.util.ResourceLeakDetectorFactory;
 import io.netty.util.ResourceLeakTracker;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.FutureListener;
+import io.netty.util.concurrent.ImmediateExecutor;
 import io.netty.util.internal.EmptyArrays;
 import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.StringUtil;
@@ -50,10 +51,13 @@ import java.security.cert.CertificateNotYetValidException;
 import java.security.cert.CertificateRevokedException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -153,6 +157,7 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
     final Certificate[] keyCertChain;
     final ClientAuth clientAuth;
     final String[] protocols;
+    final String endpointIdentificationAlgorithm;
     final boolean hasTLSv13Cipher;
 
     final boolean enableOcsp;
@@ -208,10 +213,12 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
 
     ReferenceCountedOpenSslContext(Iterable<String> ciphers, CipherSuiteFilter cipherFilter,
                                    OpenSslApplicationProtocolNegotiator apn, int mode, Certificate[] keyCertChain,
-                                   ClientAuth clientAuth, String[] protocols, boolean startTls, boolean enableOcsp,
-                                   boolean leakDetection, Map.Entry<SslContextOption<?>, Object>... ctxOptions)
+                                   ClientAuth clientAuth, String[] protocols, boolean startTls,
+                                   String endpointIdentificationAlgorithm, boolean enableOcsp,
+                                   boolean leakDetection, ResumptionController resumptionController,
+                                   Map.Entry<SslContextOption<?>, Object>... ctxOptions)
             throws SSLException {
-        super(startTls);
+        super(startTls, resumptionController);
 
         OpenSsl.ensureAvailability();
 
@@ -229,7 +236,7 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
         OpenSslAsyncPrivateKeyMethod asyncPrivateKeyMethod = null;
         OpenSslCertificateCompressionConfig certCompressionConfig = null;
         Integer maxCertificateList = null;
-
+        String[] groups = OpenSsl.NAMED_GROUPS;
         if (ctxOptions != null) {
             for (Map.Entry<SslContextOption<?>, Object> ctxOpt : ctxOptions) {
                 SslContextOption<?> option = ctxOpt.getKey();
@@ -246,6 +253,13 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
                     certCompressionConfig = (OpenSslCertificateCompressionConfig) ctxOpt.getValue();
                 } else if (option == OpenSslContextOption.MAX_CERTIFICATE_LIST_BYTES) {
                     maxCertificateList = (Integer) ctxOpt.getValue();
+                } else if (option == OpenSslContextOption.GROUPS) {
+                    String[] groupsArray = (String[]) ctxOpt.getValue();
+                    Set<String> groupsSet = new LinkedHashSet<String>(groupsArray.length);
+                    for (String group : groupsArray) {
+                        groupsSet.add(GroupsConverter.toOpenSsl(group));
+                    }
+                    groups = groupsSet.toArray(EmptyArrays.EMPTY_STRINGS);
                 } else {
                     logger.debug("Skipping unsupported " + SslContextOption.class.getSimpleName()
                             + ": " + ctxOpt.getKey());
@@ -264,6 +278,7 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
         this.mode = mode;
         this.clientAuth = isServer() ? checkNotNull(clientAuth, "clientAuth") : ClientAuth.NONE;
         this.protocols = protocols == null ? OpenSsl.defaultProtocols(mode == SSL.SSL_MODE_CLIENT) : protocols;
+        this.endpointIdentificationAlgorithm = endpointIdentificationAlgorithm;
         this.enableOcsp = enableOcsp;
 
         this.keyCertChain = keyCertChain == null ? null : keyCertChain.clone();
@@ -428,8 +443,17 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
             if (maxCertificateList != null) {
                 SSLContext.setMaxCertList(ctx, maxCertificateList);
             }
-            // Set the curves.
-            SSLContext.setCurvesList(ctx, OpenSsl.NAMED_GROUPS);
+
+            // Set the curves / groups if anything is configured.
+            if (groups.length > 0 && !SSLContext.setCurvesList(ctx, groups)) {
+                String msg = "failed to set curves / groups suite: " + Arrays.toString(groups);
+                int err = SSL.getLastErrorNumber();
+                if (err != 0) {
+                    // We have some more details about why the operations failed, include these into the message.
+                    msg += ". " + SSL.getErrorString(err);
+                }
+                throw new SSLException(msg);
+            }
             success = true;
         } finally {
             if (!success) {
@@ -471,27 +495,30 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
 
     @Override
     protected final SslHandler newHandler(ByteBufAllocator alloc, boolean startTls) {
-        return new SslHandler(newEngine0(alloc, null, -1, false), startTls);
+        return new SslHandler(newEngine0(alloc, null, -1, false), startTls, ImmediateExecutor.INSTANCE,
+                resumptionController);
     }
 
     @Override
     protected final SslHandler newHandler(ByteBufAllocator alloc, String peerHost, int peerPort, boolean startTls) {
-        return new SslHandler(newEngine0(alloc, peerHost, peerPort, false), startTls);
+        return new SslHandler(newEngine0(alloc, peerHost, peerPort, false), startTls, ImmediateExecutor.INSTANCE,
+                resumptionController);
     }
 
     @Override
     protected SslHandler newHandler(ByteBufAllocator alloc, boolean startTls, Executor executor) {
-        return new SslHandler(newEngine0(alloc, null, -1, false), startTls, executor);
+        return new SslHandler(newEngine0(alloc, null, -1, false), startTls, executor, resumptionController);
     }
 
     @Override
     protected SslHandler newHandler(ByteBufAllocator alloc, String peerHost, int peerPort,
                                     boolean startTls, Executor executor) {
-        return new SslHandler(newEngine0(alloc, peerHost, peerPort, false), executor);
+        return new SslHandler(newEngine0(alloc, peerHost, peerPort, false), false, executor, resumptionController);
     }
 
     SSLEngine newEngine0(ByteBufAllocator alloc, String peerHost, int peerPort, boolean jdkCompatibilityMode) {
-        return new ReferenceCountedOpenSslEngine(this, alloc, peerHost, peerPort, jdkCompatibilityMode, true);
+        return new ReferenceCountedOpenSslEngine(this, alloc, peerHost, peerPort, jdkCompatibilityMode, true,
+                endpointIdentificationAlgorithm);
     }
 
     /**
@@ -663,12 +690,24 @@ public abstract class ReferenceCountedOpenSslContext extends SslContext implemen
         return peerCerts;
     }
 
+    /**
+     * @deprecated This method is kept for API backwards compatibility.
+     */
+    @Deprecated
     protected static X509TrustManager chooseTrustManager(TrustManager[] managers) {
+        return chooseTrustManager(managers, null);
+    }
+
+    static X509TrustManager chooseTrustManager(TrustManager[] managers,
+                                                         ResumptionController resumptionController) {
         for (TrustManager m : managers) {
             if (m instanceof X509TrustManager) {
                 X509TrustManager tm = (X509TrustManager) m;
                 if (PlatformDependent.javaVersion() >= 7) {
-                    tm = OpenSslX509TrustManagerWrapper.wrapIfNeeded((X509TrustManager) m);
+                    if (resumptionController != null) {
+                        tm = (X509TrustManager) resumptionController.wrapIfNeeded(tm);
+                    }
+                    tm = OpenSslX509TrustManagerWrapper.wrapIfNeeded(tm);
                     if (useExtendedTrustManager(tm)) {
                         // Wrap the TrustManager to provide a better exception message for users to debug hostname
                         // validation failures.

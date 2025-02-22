@@ -17,10 +17,15 @@ package io.netty.handler.codec.http;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.util.AsciiString;
 import io.netty.util.CharsetUtil;
+import io.netty.util.ReferenceCountUtil;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -377,6 +382,33 @@ public class HttpRequestDecoderTest {
     }
 
     @Test
+    void testTotalHeaderLimit() throws Exception {
+        String requestStr = "GET /some/path HTTP/1.1\r\n" +
+                "Host: a.b\r\n" + // 9 content bytes
+                "a1: b\r\n" +     // + 5 = 14 bytes,
+                "a2: b\r\n\r\n";  // + 5 = 19 bytes
+
+        // Decoding with a max header size of 18 bytes must fail:
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpRequestDecoder(1024, 18, 1024));
+        assertTrue(channel.writeInbound(Unpooled.copiedBuffer(requestStr, CharsetUtil.US_ASCII)));
+        HttpRequest request = channel.readInbound();
+        assertTrue(request.decoderResult().isFailure());
+        assertInstanceOf(TooLongHttpHeaderException.class, request.decoderResult().cause());
+        assertFalse(channel.finish());
+
+        // Decoding with a max header size of 19 must pass:
+        channel = new EmbeddedChannel(new HttpRequestDecoder(1024, 19, 1024));
+        assertTrue(channel.writeInbound(Unpooled.copiedBuffer(requestStr, CharsetUtil.US_ASCII)));
+        request = channel.readInbound();
+        assertTrue(request.decoderResult().isSuccess());
+        assertEquals("a.b", request.headers().get("Host"));
+        assertEquals("b", request.headers().get("a1"));
+        assertEquals("b", request.headers().get("a2"));
+        assertEquals(LastHttpContent.EMPTY_LAST_CONTENT, channel.readInbound());
+        assertFalse(channel.finish());
+    }
+
+    @Test
     public void testHeaderNameStartsWithControlChar1c() {
         testHeaderNameStartsWithControlChar(0x1c);
     }
@@ -671,6 +703,67 @@ public class HttpRequestDecoderTest {
         c.release();
         assertTrue(c.decoderResult().isFailure());
         assertInstanceOf(NumberFormatException.class, c.decoderResult().cause());
+        assertFalse(channel.finish());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = { "HTP/1.1", "HTTP", "HTTP/1x", "Something/1.1", "HTTP/1",
+            "HTTP/1.11", "HTTP/11.1", "HTTP/A.1", "HTTP/1.B"})
+    public void testInvalidVersion(String version) {
+        testInvalidHeaders0("GET / " + version + "\r\nHost: whatever\r\n\r\n");
+    }
+
+    @ParameterizedTest
+    // See https://www.unicode.org/charts/nameslist/n_0000.html
+    @ValueSource(strings = { "\r", "\u000b", "\u000c" })
+    public void testHeaderValueWithInvalidSuffix(String suffix) {
+        testInvalidHeaders0("GET / HTTP/1.1\r\nHost: whatever\r\nTest-Key: test-value" + suffix + "\r\n\r\n");
+    }
+
+    @Test
+    public void testLeadingWhitespaceInFirstHeaderName() {
+        testInvalidHeaders0("POST / HTTP/1.1\r\n\tContent-Length: 1\r\n\r\nX");
+    }
+
+   @Test
+    public void testNulInInitialLine() {
+        testInvalidHeaders0("GET / HTTP/1.1\r\u0000\nHost: whatever\r\n\r\n");
+    }
+
+    @Test
+    void reentrantClose() {
+        String requestStr = "GET / HTTP/1.1\r\n" +
+                "Host: example.com\r\n" +
+                "Content-Length: 0\r\n" +
+                "\r\n" +
+                "GET / HTTP/1.1\r\n" +
+                "Host: example.com\r\n" +
+                "Content-Length: 0\r\n" +
+                "\r\n";
+        EmbeddedChannel channel = new EmbeddedChannel(new HttpRequestDecoder(), new ChannelInboundHandlerAdapter() {
+            private int i;
+
+            @Override
+            public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                if (i == 0) {
+                    assertInstanceOf(HttpRequest.class, msg);
+                } else if (i == 1) {
+                    assertInstanceOf(LastHttpContent.class, msg);
+                } else if (i == 2) {
+                    assertInstanceOf(HttpRequest.class, msg);
+                } else if (i == 3) {
+                    assertInstanceOf(LastHttpContent.class, msg);
+                }
+                ReferenceCountUtil.release(msg);
+
+                if (++i == 1) {
+                    // first request
+                    ctx.close();
+                }
+            }
+        });
+
+        assertFalse(channel.writeInbound(Unpooled.copiedBuffer(requestStr, CharsetUtil.US_ASCII)));
         assertFalse(channel.finish());
     }
 

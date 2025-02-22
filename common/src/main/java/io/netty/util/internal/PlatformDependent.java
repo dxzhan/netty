@@ -28,6 +28,8 @@ import org.jctools.queues.atomic.MpscAtomicArrayQueue;
 import org.jctools.queues.atomic.MpscChunkedAtomicArrayQueue;
 import org.jctools.queues.atomic.MpscUnboundedAtomicArrayQueue;
 import org.jctools.queues.atomic.SpscLinkedAtomicQueue;
+import org.jctools.queues.atomic.unpadded.MpscAtomicUnpaddedArrayQueue;
+import org.jctools.queues.unpadded.MpscUnpaddedArrayQueue;
 import org.jctools.util.Pow2;
 import org.jctools.util.UnsafeAccess;
 
@@ -237,9 +239,8 @@ public final class PlatformDependent {
                         if (file.exists()) {
                             BufferedReader reader = null;
                             try {
-                                reader = new BufferedReader(
-                                        new InputStreamReader(
-                                                new FileInputStream(file), CharsetUtil.UTF_8));
+                                reader = new BufferedReader(new InputStreamReader(
+                                        new BoundedInputStream(new FileInputStream(file)), CharsetUtil.UTF_8));
 
                                 String line;
                                 while ((line = reader.readLine()) != null) {
@@ -572,31 +573,47 @@ public final class PlatformDependent {
     }
 
     public static byte getByte(byte[] data, int index) {
-        return PlatformDependent0.getByte(data, index);
+        return hasUnsafe() ? PlatformDependent0.getByte(data, index) : data[index];
     }
 
     public static byte getByte(byte[] data, long index) {
-        return PlatformDependent0.getByte(data, index);
+        return hasUnsafe() ? PlatformDependent0.getByte(data, index) : data[toIntExact(index)];
     }
 
     public static short getShort(byte[] data, int index) {
-        return PlatformDependent0.getShort(data, index);
+        return hasUnsafe() ? PlatformDependent0.getShort(data, index) : data[index];
     }
 
     public static int getInt(byte[] data, int index) {
-        return PlatformDependent0.getInt(data, index);
+        return hasUnsafe() ? PlatformDependent0.getInt(data, index) : data[index];
     }
 
     public static int getInt(int[] data, long index) {
-        return PlatformDependent0.getInt(data, index);
+        return hasUnsafe() ? PlatformDependent0.getInt(data, index) : data[toIntExact(index)];
     }
 
     public static long getLong(byte[] data, int index) {
-        return PlatformDependent0.getLong(data, index);
+        return hasUnsafe() ? PlatformDependent0.getLong(data, index) : data[index];
     }
 
     public static long getLong(long[] data, long index) {
-        return PlatformDependent0.getLong(data, index);
+        return hasUnsafe() ? PlatformDependent0.getLong(data, index) : data[toIntExact(index)];
+    }
+
+    private static int toIntExact(long value) {
+        if (javaVersion() >= 8) {
+            return toIntExact8(value);
+        }
+        int result = (int) value;
+        if (result != value) {
+            throw new ArithmeticException("Cannot convert to exact int: " + value);
+        }
+        return result;
+    }
+
+    @SuppressJava6Requirement(reason = "version checked")
+    private static int toIntExact8(long value) {
+        return Math.toIntExact(value);
     }
 
     private static long getLongSafe(byte[] bytes, int offset) {
@@ -1074,6 +1091,15 @@ public final class PlatformDependent {
      */
     public static <T> Queue<T> newFixedMpscQueue(int capacity) {
         return hasUnsafe() ? new MpscArrayQueue<T>(capacity) : new MpscAtomicArrayQueue<T>(capacity);
+    }
+
+    /**
+     * Create a new un-padded {@link Queue} which is safe to use for multiple producers (different threads) and a single
+     * consumer (one thread!) with the given fixes {@code capacity}.<br>
+     * This should be preferred to {@link #newFixedMpscQueue(int)} when the queue is not to be heavily contended.
+     */
+    public static <T> Queue<T> newFixedMpscUnpaddedQueue(int capacity) {
+        return hasUnsafe() ? new MpscUnpaddedArrayQueue<T>(capacity) : new MpscAtomicUnpaddedArrayQueue<T>(capacity);
     }
 
     /**

@@ -30,15 +30,14 @@ import io.netty.channel.EventLoop;
 import io.netty.channel.FileRegion;
 import io.netty.channel.MessageSizeEstimator;
 import io.netty.channel.RecvByteBufAllocator;
+import io.netty.channel.ServerChannel;
 import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.nio.AbstractNioByteChannel;
 import io.netty.channel.socket.DuplexChannel;
 import io.netty.channel.socket.DuplexChannelConfig;
-import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.SocketUtils;
 import io.netty.util.internal.SuppressJava6Requirement;
-import io.netty.util.internal.UnstableApi;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
@@ -74,7 +73,7 @@ public final class NioDomainSocketChannel extends AbstractNioByteChannel
     private volatile boolean isInputShutdown;
     private volatile boolean isOutputShutdown;
 
-    private static SocketChannel newChannel(SelectorProvider provider) {
+    static SocketChannel newChannel(SelectorProvider provider) {
         if (PlatformDependent.javaVersion() < 16) {
             throw new UnsupportedOperationException("Only supported on java 16+");
         }
@@ -126,8 +125,8 @@ public final class NioDomainSocketChannel extends AbstractNioByteChannel
     }
 
     @Override
-    public ServerSocketChannel parent() {
-        return (ServerSocketChannel) super.parent();
+    public ServerChannel parent() {
+        return (ServerChannel) super.parent();
     }
 
     @Override
@@ -161,8 +160,7 @@ public final class NioDomainSocketChannel extends AbstractNioByteChannel
         return isInputShutdown() && isOutputShutdown() || !isActive();
     }
 
-    @SuppressJava6Requirement(reason = "Usage guarded by java version check")
-    @UnstableApi
+    @SuppressJava6Requirement(reason = "guarded by version check")
     @Override
     protected void doShutdownOutput() throws Exception {
         javaChannel().shutdownOutput();
@@ -268,6 +266,7 @@ public final class NioDomainSocketChannel extends AbstractNioByteChannel
             promise.setSuccess();
         }
     }
+
     private void shutdownInput0(final ChannelPromise promise) {
         try {
             shutdownInput0();
@@ -345,11 +344,10 @@ public final class NioDomainSocketChannel extends AbstractNioByteChannel
 
     @Override
     protected void doClose() throws Exception {
-        super.doClose();
-        javaChannel().close();
-        SocketAddress local = localAddress();
-        if (local != null) {
-            NioDomainSocketUtil.deleteSocketFile(local);
+        try {
+            super.doClose();
+        } finally {
+            javaChannel().close();
         }
     }
 
