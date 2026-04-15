@@ -35,6 +35,7 @@ import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 
 import java.io.ByteArrayInputStream;
+import java.nio.ByteBuffer;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
@@ -66,6 +67,7 @@ public final class OpenSsl {
     private static final boolean SUPPORTS_OCSP;
     private static final boolean TLSV13_SUPPORTED;
     private static final boolean IS_BORINGSSL;
+    private static final boolean IS_AWSLC;
     private static final Set<String> CLIENT_DEFAULT_PROTOCOLS;
     private static final Set<String> SERVER_DEFAULT_PROTOCOLS;
     static final Set<String> SUPPORTED_PROTOCOLS_SET;
@@ -160,6 +162,7 @@ public final class OpenSsl {
             }
 
             IS_BORINGSSL = "BoringSSL".equals(versionString());
+            IS_AWSLC = versionString().startsWith("AWS-LC");
             if (IS_BORINGSSL) {
                 EXTRA_SUPPORTED_TLS_1_3_CIPHERS = new String [] { "TLS_AES_128_GCM_SHA256",
                         "TLS_AES_256_GCM_SHA384" ,
@@ -187,6 +190,9 @@ public final class OpenSsl {
                         // fips and the configure group is not supported when using FIPS.
                         // See https://github.com/netty/netty-tcnative/issues/883
                         defaultGroupsIter.remove();
+
+                        // Clear the error as otherwise we might fail later.
+                        SSL.clearError();
                     }
                 }
                 namedGroups = defaultConvertedNamedGroups.toArray(EmptyArrays.EMPTY_STRINGS);
@@ -218,6 +224,7 @@ public final class OpenSsl {
 
                         } catch (Exception ignore) {
                             tlsv13Supported = false;
+                            SSL.clearError();
                         }
                     }
 
@@ -263,7 +270,7 @@ public final class OpenSsl {
                             try {
                                 boolean propertySet = SystemPropertyUtil.contains(
                                         "io.netty.handler.ssl.openssl.useKeyManagerFactory");
-                                if (!IS_BORINGSSL) {
+                                if (!(IS_BORINGSSL || IS_AWSLC)) {
                                     useKeyManagerFactory = SystemPropertyUtil.getBoolean(
                                             "io.netty.handler.ssl.openssl.useKeyManagerFactory", true);
 
@@ -277,7 +284,7 @@ public final class OpenSsl {
                                     if (propertySet) {
                                         logger.info("System property " +
                                                 "'io.netty.handler.ssl.openssl.useKeyManagerFactory'" +
-                                                " is deprecated and will be ignored when using BoringSSL");
+                                                " is deprecated and will be ignored when using BoringSSL or AWS-LC");
                                     }
                                 }
                             } catch (Throwable ignore) {
@@ -285,6 +292,7 @@ public final class OpenSsl {
                             }
                         } catch (Exception e) {
                             logger.debug("KeyManagerFactory not supported", e);
+                            SSL.clearError();
                         } finally {
                             privateKey.release();
                         }
@@ -318,6 +326,9 @@ public final class OpenSsl {
                                 supportedNamedGroups.add(namedGroup);
                             } else {
                                 unsupportedNamedGroups.add(namedGroup);
+
+                                // Clear the error as otherwise we might fail later.
+                                SSL.clearError();
                             }
                         }
 
@@ -336,7 +347,7 @@ public final class OpenSsl {
                                         Arrays.toString(groupArray),
                                         Arrays.toString(unsupportedNamedGroups.toArray(EmptyArrays.EMPTY_STRINGS)));
                             }
-                            namedGroups =  supportedConvertedNamedGroups.toArray(EmptyArrays.EMPTY_STRINGS);
+                            namedGroups = supportedConvertedNamedGroups.toArray(EmptyArrays.EMPTY_STRINGS);
                         }
                     } else {
                         namedGroups = defaultConvertedNamedGroups.toArray(EmptyArrays.EMPTY_STRINGS);
@@ -354,8 +365,14 @@ public final class OpenSsl {
             for (String cipher: AVAILABLE_OPENSSL_CIPHER_SUITES) {
                 // Included converted but also openssl cipher name
                 if (!isTLSv13Cipher(cipher)) {
-                    availableJavaCipherSuites.add(CipherSuiteConverter.toJava(cipher, "TLS"));
-                    availableJavaCipherSuites.add(CipherSuiteConverter.toJava(cipher, "SSL"));
+                    final String tlsConversion = CipherSuiteConverter.toJava(cipher, "TLS");
+                    if (tlsConversion != null) {
+                        availableJavaCipherSuites.add(tlsConversion);
+                    }
+                    final String sslConversion = CipherSuiteConverter.toJava(cipher, "SSL");
+                    if (sslConversion != null) {
+                        availableJavaCipherSuites.add(sslConversion);
+                    }
                 } else {
                     // TLSv1.3 ciphers have the correct format.
                     availableJavaCipherSuites.add(cipher);
@@ -438,6 +455,7 @@ public final class OpenSsl {
             SUPPORTS_OCSP = false;
             TLSV13_SUPPORTED = false;
             IS_BORINGSSL = false;
+            IS_AWSLC = false;
             EXTRA_SUPPORTED_TLS_1_3_CIPHERS = EmptyArrays.EMPTY_STRINGS;
             EXTRA_SUPPORTED_TLS_1_3_CIPHERS_STRING = StringUtil.EMPTY_STRING;
             NAMED_GROUPS = DEFAULT_NAMED_GROUPS;
@@ -659,9 +677,14 @@ public final class OpenSsl {
 
     static long memoryAddress(ByteBuf buf) {
         assert buf.isDirect();
-        return buf.hasMemoryAddress() ? buf.memoryAddress() :
-                // Use internalNioBuffer to reduce object creation.
-                Buffer.address(buf.internalNioBuffer(0, buf.readableBytes()));
+        if (buf.hasMemoryAddress()) {
+            return buf.memoryAddress();
+        }
+        // Use internalNioBuffer to reduce object creation.
+        // It is important to add the position as the returned ByteBuffer might be shared by multiple ByteBuf
+        // instances and so has an address that starts before the start of the ByteBuf itself.
+        ByteBuffer byteBuffer = buf.internalNioBuffer(0, buf.readableBytes());
+        return Buffer.address(byteBuffer) + byteBuffer.position();
     }
 
     private OpenSsl() { }
@@ -713,11 +736,12 @@ public final class OpenSsl {
 
     static boolean isOptionSupported(SslContextOption<?> option) {
         if (isAvailable()) {
-            if (option == OpenSslContextOption.USE_TASKS) {
+            if (option == OpenSslContextOption.USE_TASKS ||
+                    option == OpenSslContextOption.TMP_DH_KEYLENGTH) {
                 return true;
             }
             // Check for options that are only supported by BoringSSL atm.
-            if (isBoringSSL()) {
+            if (isBoringSSL() || isAWSLC()) {
                 return option == OpenSslContextOption.ASYNC_PRIVATE_KEY_METHOD ||
                         option == OpenSslContextOption.PRIVATE_KEY_METHOD ||
                         option == OpenSslContextOption.CERTIFICATE_COMPRESSION_ALGORITHMS ||
@@ -757,5 +781,9 @@ public final class OpenSsl {
 
     static boolean isBoringSSL() {
         return IS_BORINGSSL;
+    }
+
+    static boolean isAWSLC() {
+        return IS_AWSLC;
     }
 }

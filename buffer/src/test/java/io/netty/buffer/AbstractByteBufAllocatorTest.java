@@ -17,6 +17,7 @@ package io.netty.buffer;
 
 import io.netty.util.internal.PlatformDependent;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.Executable;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadMXBean;
@@ -26,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assumptions.assumeThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.abort;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -130,6 +132,17 @@ public abstract class AbstractByteBufAllocatorTest<T extends AbstractByteBufAllo
     }
 
     @Test
+    public void testUsedDirectMemoryHuge() {
+        T allocator =  newAllocator(true);
+        ByteBufAllocatorMetric metric = ((ByteBufAllocatorMetricProvider) allocator).metric();
+        assertEquals(0, metric.usedHeapMemory());
+        int size = 32 * 1024 * 1024;
+        ByteBuf buffer = allocator.directBuffer(size, size);
+        assertEquals(size, metric.usedDirectMemory());
+        buffer.release();
+    }
+
+    @Test
     public void testUsedHeapMemory() {
         T allocator =  newAllocator(true);
         ByteBufAllocatorMetric metric = ((ByteBufAllocatorMetricProvider) allocator).metric();
@@ -146,6 +159,17 @@ public abstract class AbstractByteBufAllocatorTest<T extends AbstractByteBufAllo
 
         buffer.release();
         assertEquals(expectedUsedMemoryAfterRelease(allocator, capacity), metric.usedHeapMemory());
+    }
+
+    @Test
+    public void testUsedHeapMemoryHuge() {
+        T allocator =  newAllocator(true);
+        ByteBufAllocatorMetric metric = ((ByteBufAllocatorMetricProvider) allocator).metric();
+        assertEquals(0, metric.usedHeapMemory());
+        int size = 32 * 1024 * 1024;
+        ByteBuf buffer = allocator.heapBuffer(size, size);
+        assertEquals(size, metric.usedHeapMemory());
+        buffer.release();
     }
 
     @Test
@@ -172,6 +196,27 @@ public abstract class AbstractByteBufAllocatorTest<T extends AbstractByteBufAllo
         assertThat(allocAfter - allocBefore)
                 .as("allocated MB: %.3f", (allocAfter - allocBefore) / 1024.0 / 1024.0)
                 .isLessThan(8 * 1024 * 1024);
+    }
+
+    @Test
+    public void testCapacityNotGreaterThanMaxCapacity() {
+        testCapacityNotGreaterThanMaxCapacity(true);
+        testCapacityNotGreaterThanMaxCapacity(false);
+    }
+
+    private void testCapacityNotGreaterThanMaxCapacity(boolean preferDirect) {
+        final int maxSize = 100000;
+        final ByteBuf buf = newAllocator(preferDirect).newDirectBuffer(maxSize, maxSize);
+        try {
+            assertThrows(IllegalArgumentException.class, new Executable() {
+                @Override
+                public void execute() throws Throwable {
+                    buf.capacity(maxSize + 1);
+                }
+            });
+        } finally {
+            buf.release();
+        }
     }
 
     protected long expectedUsedMemory(T allocator, int capacity) {

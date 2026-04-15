@@ -28,7 +28,10 @@ import io.netty.util.internal.EmptyArrays;
 import io.netty.util.internal.PlatformDependent;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledIf;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.junit.jupiter.api.function.Executable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -550,8 +553,9 @@ public class OpenSslEngineTest extends SSLEngineTest {
                                         .build());
         SelfSignedCertificate ssc = CachedSelfSignedCertificate.getCachedCertificate();
         serverSslCtx = wrapContext(param, SslContextBuilder.forServer(ssc.certificate(), ssc.privateKey())
-                                        .sslProvider(sslServerProvider())
-                                        .build());
+                .sslProvider(sslServerProvider())
+                .option(OpenSslContextOption.TMP_DH_KEYLENGTH, 2048)
+                .build());
 
         testWrapWithDifferentSizes(param, SslProtocols.TLS_v1, "AES128-SHA");
         testWrapWithDifferentSizes(param, SslProtocols.TLS_v1, "ECDHE-RSA-AES128-SHA");
@@ -582,8 +586,9 @@ public class OpenSslEngineTest extends SSLEngineTest {
                                         .build());
         SelfSignedCertificate ssc = CachedSelfSignedCertificate.getCachedCertificate();
         serverSslCtx = wrapContext(param, SslContextBuilder.forServer(ssc.certificate(), ssc.privateKey())
-                                        .sslProvider(sslServerProvider())
-                                        .build());
+                .sslProvider(sslServerProvider())
+                .option(OpenSslContextOption.TMP_DH_KEYLENGTH, 2048)
+                .build());
 
         testWrapWithDifferentSizes(param, SslProtocols.TLS_v1_1, "ECDHE-RSA-AES256-SHA");
         testWrapWithDifferentSizes(param, SslProtocols.TLS_v1_1, "AES256-SHA");
@@ -612,6 +617,7 @@ public class OpenSslEngineTest extends SSLEngineTest {
         SelfSignedCertificate ssc = CachedSelfSignedCertificate.getCachedCertificate();
         serverSslCtx = wrapContext(param, SslContextBuilder.forServer(ssc.certificate(), ssc.privateKey())
                 .sslProvider(sslServerProvider())
+                .option(OpenSslContextOption.TMP_DH_KEYLENGTH, 2048)
                 .build());
 
         testWrapWithDifferentSizes(param, SslProtocols.TLS_v1_2, "AES128-SHA");
@@ -651,6 +657,7 @@ public class OpenSslEngineTest extends SSLEngineTest {
         SelfSignedCertificate ssc = CachedSelfSignedCertificate.getCachedCertificate();
         serverSslCtx = wrapContext(param, SslContextBuilder.forServer(ssc.certificate(), ssc.privateKey())
                 .sslProvider(sslServerProvider())
+                .option(OpenSslContextOption.TMP_DH_KEYLENGTH, 2048)
                 .build());
 
         testWrapWithDifferentSizes(param, SslProtocols.SSL_v3, "ADH-AES128-SHA");
@@ -1641,5 +1648,25 @@ public class OpenSslEngineTest extends SSLEngineTest {
             cleanupClientSslEngine(client);
             cleanupServerSslEngine(server);
         }
+    }
+
+    private static boolean isWrappingTrustManagerSupported() {
+        return OpenSslX509TrustManagerWrapper.isWrappingSupported();
+    }
+
+    @MethodSource("newTestParams")
+    @ParameterizedTest
+    @EnabledIf("isWrappingTrustManagerSupported")
+    @Override
+    public void testUsingX509TrustManagerVerifiesHostname(SSLEngineTestParam param) throws Exception {
+        super.testUsingX509TrustManagerVerifiesHostname(param);
+    }
+
+    @MethodSource("newTestParams")
+    @ParameterizedTest
+    @EnabledIf("isWrappingTrustManagerSupported")
+    @Override
+    public void testUsingX509TrustManagerVerifiesSNIHostname(SSLEngineTestParam param) throws Exception {
+        super.testUsingX509TrustManagerVerifiesSNIHostname(param);
     }
 }

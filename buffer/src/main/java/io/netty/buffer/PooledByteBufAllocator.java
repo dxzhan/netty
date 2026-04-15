@@ -185,7 +185,7 @@ public class PooledByteBufAllocator extends AbstractByteBufAllocator implements 
     }
 
     public static final PooledByteBufAllocator DEFAULT =
-            new PooledByteBufAllocator(PlatformDependent.directBufferPreferred());
+            new PooledByteBufAllocator(!PlatformDependent.isExplicitNoPreferDirect());
 
     private final PoolArena<byte[]>[] heapArenas;
     private final PoolArena<ByteBuffer>[] directArenas;
@@ -403,8 +403,8 @@ public class PooledByteBufAllocator extends AbstractByteBufAllocator implements 
             buf = directArena.allocate(cache, initialCapacity, maxCapacity);
         } else {
             buf = PlatformDependent.hasUnsafe() ?
-                    UnsafeByteBufUtil.newUnsafeDirectByteBuf(this, initialCapacity, maxCapacity) :
-                    new UnpooledDirectByteBuf(this, initialCapacity, maxCapacity);
+                    UnsafeByteBufUtil.newUnsafeDirectByteBuf(this, initialCapacity, maxCapacity, true) :
+                    new UnpooledDirectByteBuf(this, initialCapacity, maxCapacity, true);
         }
 
         return toLeakAwareBuffer(buf);

@@ -15,51 +15,26 @@
  */
 package io.netty.buffer;
 
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-
-import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-class AdaptivePoolingAllocatorTest implements Supplier<String> {
-    private int i;
-
-    @BeforeEach
-    void setUp() {
-        i = 0;
-    }
-
-    @Override
-    public String get() {
-        return "i = " + i;
-    }
-
+class AdaptivePoolingAllocatorTest {
     @Test
-    void sizeBucketComputations() throws Exception {
-        assertSizeBucket(0, 8 * 1024);
-        assertSizeBucket(1, 16 * 1024);
-        assertSizeBucket(2, 32 * 1024);
-        assertSizeBucket(3, 64 * 1024);
-        assertSizeBucket(4, 128 * 1024);
-        assertSizeBucket(5, 256 * 1024);
-        assertSizeBucket(6, 512 * 1024);
-        assertSizeBucket(7, 1024 * 1024);
-        // The sizeBucket function will be used for sizes up to 10 MiB
-        assertSizeBucket(7, 2 * 1024 * 1024);
-        assertSizeBucket(7, 3 * 1024 * 1024);
-        assertSizeBucket(7, 4 * 1024 * 1024);
-        assertSizeBucket(7, 5 * 1024 * 1024);
-        assertSizeBucket(7, 6 * 1024 * 1024);
-        assertSizeBucket(7, 7 * 1024 * 1024);
-        assertSizeBucket(7, 8 * 1024 * 1024);
-        assertSizeBucket(7, 9 * 1024 * 1024);
-        assertSizeBucket(7, 10 * 1024 * 1024);
+    void sizeClassComputations() throws Exception {
+        final int[] sizeClasses = AdaptivePoolingAllocator.getSizeClasses();
+        for (int sizeClassIndex = 0; sizeClassIndex < sizeClasses.length; sizeClassIndex++) {
+            final int previousSizeIncluded = sizeClassIndex == 0? 0 : sizeClasses[sizeClassIndex - 1] + 1;
+            assertSizeClassOf(sizeClassIndex, previousSizeIncluded, sizeClasses[sizeClassIndex]);
+        }
+        // beyond the last size class, we return the size class array's length
+        assertSizeClassOf(sizeClasses.length, sizeClasses[sizeClasses.length - 1] + 1,
+                          sizeClasses[sizeClasses.length - 1] + 1);
     }
 
-    private void assertSizeBucket(int expectedSizeBucket, int maxSizeIncluded) {
-        for (; i <= maxSizeIncluded; i++) {
-            assertEquals(expectedSizeBucket, AdaptivePoolingAllocator.sizeBucket(i), this);
+    private static void assertSizeClassOf(int expectedSizeClass, int previousSizeIncluded, int maxSizeIncluded) {
+        for (int size = previousSizeIncluded; size <= maxSizeIncluded; size++) {
+            assertEquals(expectedSizeClass, AdaptivePoolingAllocator.sizeClassIndexOf(size), "size = " + size);
         }
     }
 }

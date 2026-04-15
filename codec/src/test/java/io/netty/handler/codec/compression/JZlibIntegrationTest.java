@@ -1,5 +1,5 @@
 /*
- * Copyright 2012 The Netty Project
+ * Copyright 2014 The Netty Project
  *
  * The Netty Project licenses this file to you under the Apache License,
  * version 2.0 (the "License"); you may not use this file except in compliance
@@ -13,9 +13,19 @@
  * License for the specific language governing permissions and limitations
  * under the License.
  */
+package io.netty.handler.codec.compression;
 
-/**
- * UDT Benchmarks
- */
-package io.netty.test.udt.bench;
+import io.netty.channel.embedded.EmbeddedChannel;
 
+public class JZlibIntegrationTest extends AbstractIntegrationTest {
+
+    @Override
+    protected EmbeddedChannel createEncoder() {
+        return new EmbeddedChannel(new JZlibEncoder());
+    }
+
+    @Override
+    protected EmbeddedChannel createDecoder() {
+        return new EmbeddedChannel(new JZlibDecoder(0));
+    }
+}
